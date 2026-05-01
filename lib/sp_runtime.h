@@ -25,6 +25,10 @@
 #include <time.h>
 #include <setjmp.h>
 #ifdef _WIN32
+/* winsock2 must precede windows.h, otherwise windows.h pulls in
+   winsock v1 and the v2 declarations clash. */
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 /* POSIX compat shims for MinGW */
 #define mmap(a,l,p,f,fd,off) VirtualAlloc(NULL,(l),MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE)
@@ -40,10 +44,11 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #endif
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if defined(__GLIBC__)
 #include <malloc.h>
 #else
-/* Darwin's libc has no malloc_trim; make it a no-op so call sites stay portable. */
+/* malloc_trim is a glibc extension; macOS, Windows, and musl have no
+   equivalent. Make it a no-op so call sites stay portable. */
 #define malloc_trim(x) ((void)0)
 #endif
 #ifndef MAP_ANONYMOUS
@@ -770,6 +775,107 @@ static mrb_bool sp_file_exist(const char *path) { FILE *f = fopen(path, "r"); if
 static void sp_file_delete(const char *path) { remove(path); }
 static const char *sp_backtick(const char *cmd) { FILE *p = popen(cmd, "r"); if (!p) return sp_str_empty; char *buf = sp_str_alloc_raw(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; pclose(p); return buf; }
 static const char *sp_file_basename(const char *path) { const char *s = strrchr(path, '/'); if (s) return s + 1; return path; }
+
+/* ---- Socket runtime (DNS + TCP client) ---- */
+#ifdef _WIN32
+/* winsock2.h / ws2tcpip.h are included at the top of the header,
+   ahead of windows.h, to avoid the v1/v2 conflict. */
+#define sp_close_sock(s) closesocket(s)
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#define sp_close_sock(s) close(s)
+#endif
+
+static void sp_socket_init(void) {
+#ifdef _WIN32
+  static int inited = 0;
+  if (!inited) { WSADATA w; WSAStartup(MAKEWORD(2,2), &w); inited = 1; }
+#endif
+}
+
+/* Resolve hostname to first IPv4 dotted-quad. Empty string on failure. */
+static const char *sp_dns_lookup(const char *host) {
+  sp_socket_init();
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) return sp_str_empty;
+  struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+  char tmp[INET_ADDRSTRLEN];
+  if (!inet_ntop(AF_INET, &sin->sin_addr, tmp, sizeof(tmp))) { freeaddrinfo(res); return sp_str_empty; }
+  size_t l = strlen(tmp);
+  char *r = sp_str_alloc_raw(l + 1);
+  memcpy(r, tmp, l + 1);
+  freeaddrinfo(res);
+  return r;
+}
+
+/* TCP client. Returns fd >= 0 on success, < 0 on failure. */
+static int sp_tcp_connect(const char *host, mrb_int port) {
+  sp_socket_init();
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  char port_s[16];
+  snprintf(port_s, sizeof(port_s), "%lld", (long long)port);
+  if (getaddrinfo(host, port_s, &hints, &res) != 0 || !res) return -1;
+  int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (fd < 0) { freeaddrinfo(res); return -1; }
+  if (connect(fd, res->ai_addr, (socklen_t)res->ai_addrlen) != 0) {
+    sp_close_sock(fd);
+    freeaddrinfo(res);
+    return -1;
+  }
+  freeaddrinfo(res);
+  return fd;
+}
+static int sp_tcp_write_n(int fd, const char *buf, size_t len) {
+  size_t off = 0;
+  while (off < len) {
+    int n = (int)send(fd, buf + off, (int)(len - off), 0);
+    if (n <= 0) return -1;
+    off += (size_t)n;
+  }
+  return (int)len;
+}
+static int sp_tcp_write(int fd, const char *str) {
+  return sp_tcp_write_n(fd, str, strlen(str));
+}
+static int sp_tcp_puts(int fd, const char *str) {
+  size_t l = strlen(str);
+  if (sp_tcp_write_n(fd, str, l) < 0) return -1;
+  if (l == 0 || str[l-1] != '\n') return sp_tcp_write_n(fd, "\n", 1);
+  return (int)l;
+}
+static const char *sp_tcp_read(int fd, mrb_int n) {
+  if (n <= 0) return sp_str_empty;
+  char *buf = sp_str_alloc_raw((size_t)n + 1);
+  int got = (int)recv(fd, buf, (int)n, 0);
+  if (got <= 0) { buf[0] = 0; return sp_str_empty; }
+  buf[got] = 0;
+  return buf;
+}
+static const char *sp_tcp_gets(int fd) {
+  char tmp[8192];
+  size_t pos = 0;
+  while (pos < sizeof(tmp) - 1) {
+    char c;
+    int n = (int)recv(fd, &c, 1, 0);
+    if (n <= 0) break;
+    tmp[pos++] = c;
+    if (c == '\n') break;
+  }
+  if (pos == 0) return NULL;
+  char *r = sp_str_alloc_raw(pos + 1);
+  memcpy(r, tmp, pos);
+  r[pos] = 0;
+  return r;
+}
 
 typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); } sp_Proc;
 static void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }

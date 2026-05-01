@@ -44,7 +44,7 @@ endif
 # deeply recursive bootstrap compile (~75k frames of AST traversal).
 ifeq ($(OS),Windows_NT)
   EXE = .exe
-  LDFLAGS += -Wl,--stack,67108864
+  LDFLAGS += -Wl,--stack,67108864 -lws2_32
 endif
 
 # `timeout` is GNU coreutils — present by default on Linux but missing

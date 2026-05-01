@@ -994,6 +994,9 @@ class Compiler
     if name == "Math" || name == "File" || name == "Dir" || name == "Time" || name == "IO" || name == "Process" || name == "Kernel" || name == "Comparable" || name == "Enumerable"
       return 1
     end
+    if name == "Resolv" || name == "TCPSocket"
+      return 1
+    end
     if name == "Object" || name == "Integer" || name == "String" || name == "Float" || name == "Symbol" || name == "Array" || name == "Hash" || name == "Range" || name == "Numeric" || name == "TrueClass" || name == "FalseClass" || name == "NilClass" || name == "Proc" || name == "Lambda" || name == "Regexp" || name == "MatchData" || name == "StringIO" || name == "Fiber"
       return 1
     end
@@ -3125,6 +3128,11 @@ class Compiler
             return "string"
           end
         end
+        if rcname == "Resolv"
+          if mname == "getaddress"
+            return "string"
+          end
+        end
       end
     end
     # User-defined class methods
@@ -3185,6 +3193,14 @@ class Compiler
         end
         if mname == "flush"
           return "stringio"
+        end
+      end
+      if rt == "tcp_socket"
+        if mname == "gets" || mname == "read"
+          return "string"
+        end
+        if mname == "write" || mname == "print" || mname == "puts" || mname == "close"
+          return "int"
         end
       end
     end
@@ -14938,6 +14954,14 @@ class Compiler
       end
     end
 
+    # TCPSocket methods (block-scoped)
+    if recv_type == "tcp_socket"
+      r = compile_tcp_socket_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
     # Static intern optimization: "literal".to_sym / .intern where the
     # string content is already in @sym_names becomes a compile-time
     # constant (SPS_<name> or ((sp_sym)<idx>)), avoiding the runtime
@@ -16243,6 +16267,39 @@ class Compiler
     end
     if mname == "isatty"
       return "sp_StringIO_isatty(" + rc + ")"
+    end
+    ""
+  end
+
+  def compile_tcp_socket_method_expr(nid, mname, rc)
+    if mname == "write" || mname == "print"
+      return "sp_tcp_write(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "puts"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 1
+          return "sp_tcp_puts(" + rc + ", " + compile_expr(aargs.first) + ")"
+        end
+      end
+      return "sp_tcp_write(" + rc + ", \"\\n\")"
+    end
+    if mname == "gets"
+      return "sp_tcp_gets(" + rc + ")"
+    end
+    if mname == "read"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 1
+          return "sp_tcp_read(" + rc + ", " + compile_expr(aargs.first) + ")"
+        end
+      end
+      return "sp_tcp_read(" + rc + ", 65536)"
+    end
+    if mname == "close"
+      return "(sp_close_sock(" + rc + "), 0)"
     end
     ""
   end
@@ -18438,6 +18495,12 @@ class Compiler
       if rcname == "Dir"
         if mname == "home"
           return "sp_str_dup_external(getenv(\"HOME\"))"
+        end
+      end
+      # Resolv (DNS lookup)
+      if rcname == "Resolv"
+        if mname == "getaddress"
+          return "sp_dns_lookup(" + compile_arg0(nid) + ")"
         end
       end
       # Module class method dispatch
@@ -21612,6 +21675,11 @@ class Compiler
       return
     end
 
+    # TCPSocket.open with block
+    if compile_tcp_open_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
     # Mutating operations: []=, delete, <<, replace, clear, push, reverse!, sort!
     if compile_mutating_call_stmt(nid, mname, recv) == 1
       return
@@ -21731,6 +21799,54 @@ class Compiler
       end
     end
     0
+  end
+
+  def compile_tcp_open_call_stmt(nid, mname, recv)
+    # TCPSocket.open(host, port) do |s| ... end
+    if mname != "open"
+      return 0
+    end
+    if recv < 0
+      return 0
+    end
+    if @nd_type[recv] != "ConstantReadNode"
+      return 0
+    end
+    if @nd_name[recv] != "TCPSocket"
+      return 0
+    end
+    if @nd_block[nid] < 0
+      return 0
+    end
+    args_id = @nd_arguments[nid]
+    if args_id < 0
+      return 0
+    end
+    arg_ids = get_args(args_id)
+    if arg_ids.length < 2
+      return 0
+    end
+    host_expr = compile_expr(arg_ids[0])
+    port_expr = compile_expr(arg_ids[1])
+    blk = @nd_block[nid]
+    bp = get_block_param(nid, 0)
+    emit("  { int lv_" + bp + " = sp_tcp_connect(" + host_expr + ", " + port_expr + ");")
+    emit("  if (lv_" + bp + " >= 0) {")
+    push_scope
+    declare_var(bp, "tcp_socket")
+    bbody = @nd_body[blk]
+    if bbody >= 0
+      bstmts = get_stmts(bbody)
+      bk = 0
+      while bk < bstmts.length
+        compile_stmt(bstmts[bk])
+        bk = bk + 1
+      end
+    end
+    pop_scope
+    emit("  sp_close_sock(lv_" + bp + ");")
+    emit("  } }")
+    1
   end
 
   def compile_mutating_call_stmt(nid, mname, recv)
