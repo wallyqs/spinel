@@ -115,16 +115,29 @@ desc 'Build for host + every cross target'
 task all: [:host, :xc]
 
 namespace :docker do
+  # Linux cross targets that can be exercised via docker. Windows and
+  # macOS docker images aren't usable from a Linux/macOS daemon.
+  LINUX_DOCKER = {
+    'linux-x86_64' => 'linux/amd64',
+    'linux-arm64'  => 'linux/arm64',
+  }
+
   # Pick the Linux target matching the docker default arch on the host.
   def docker_linux_target
-    arch = `uname -m`.strip
-    case arch
-    when 'arm64', 'aarch64' then 'linux-arm64'
-    else 'linux-x86_64'
-    end
+    `uname -m`.strip == 'arm64' ? 'linux-arm64' : 'linux-x86_64'
   end
 
-  desc 'Cross-compile SRC and run it inside a fresh Alpine container'
+  def docker_run_binary(target, src)
+    cross_compile(target, src)
+    bin = "#{File.basename(src, '.rb')}-#{target}"
+    puts "==> docker run (#{target}) #{bin}"
+    sh 'docker', 'run', '--rm',
+       '--platform', LINUX_DOCKER.fetch(target),
+       '-v', "#{DIST}:/d:ro",
+       'alpine:3.20', "/d/#{bin}"
+  end
+
+  desc 'Cross-compile SRC and run it via Dockerfile image build'
   task :smoke do
     src = require_src!
     target = ENV['DOCKER_TARGET'] || docker_linux_target
@@ -139,6 +152,18 @@ namespace :docker do
        SPINEL_DIR
     sh 'docker', 'run', '--rm', tag
   end
+
+  namespace :run do
+    LINUX_DOCKER.each do |target, platform|
+      desc "Run SRC's #{target} build in alpine:3.20 (#{platform})"
+      task target do
+        docker_run_binary(target, require_src!)
+      end
+    end
+  end
+
+  desc 'Run all Linux cross builds in alpine:3.20 (volume-mounted, no image build)'
+  task run: LINUX_DOCKER.keys.map { |t| "docker:run:#{t}" }
 end
 
 task default: 'xc:targets'
