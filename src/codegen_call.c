@@ -21450,7 +21450,13 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   int t = ++g_tmp;
   char rn[24], dn[24];
   snprintf(rn, sizeof rn, "_t%d", t); snprintf(dn, sizeof dn, "_d%d", t);
-  buf_puts(b, "({ "); emit_ctype(c, rr.kind == RK_BOXED ? TY_POLY : rt, b); buf_printf(b, " %s = ", rn); emit_expr(c, recv, b);
+  buf_puts(b, "({ "); emit_ctype(c, rr.kind == RK_BOXED ? TY_POLY : rt, b); buf_printf(b, " %s = ", rn);
+  /* (an and/or answering a handle, `(ARGV[1] or abort).dup`: its bytes, as
+     the plain receiver path reads it) */
+  int hl = rt == TY_STRING && logic_value_handle(c, recv);
+  if (hl) buf_puts(b, "SP_STR_B(");
+  emit_expr(c, recv, b);
+  if (hl) buf_puts(b, ")");
   buf_printf(b, rr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", rn);
   int slot = view_bind(recv, "%s", rn);
   emit_ctype(c, ret, b); buf_printf(b, " %s = ", dn); emit_call_unwrapped(c, id, b);
