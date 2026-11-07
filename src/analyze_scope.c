@@ -3912,8 +3912,12 @@ void register_attrs(Compiler *c) {
     char base[256], ivname[260];
     snprintf(base, sizeof base, "%.*s", (int)strlen(a[i].name) - (a[i].kind == LR_WRITER), a[i].name);
     snprintf(ivname, sizeof ivname, "@%s", base);
-    if (!comp_is_sg_civ(k, base) && (body_assigns_civ(c, a[i].cls, ivname) || cmethod_names_ivar(c, a[i].cls, ivname)))
+    if (!comp_is_sg_civ(k, base) && (body_assigns_civ(c, a[i].cls, ivname) || cmethod_names_ivar(c, a[i].cls, ivname))) {
       comp_add_sg_civ(k, base);
+      /* the accessor reads and writes civ_<Class>_<x>, so the class has the
+         ivar even when the body's only store is nil, which interns none */
+      comp_ivar_intern(k, ivname);
+    }
   }
   free(a);
 }
