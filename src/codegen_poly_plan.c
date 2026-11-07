@@ -2854,7 +2854,11 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
     char cv[64];
     snprintf(cv, sizeof cv, "%s(_t%d)", sp_streq(name, "to_i") ? "sp_poly_to_i_meth" : "sp_poly_to_f_meth", tv);
     buf_printf(b, " default: _t%d = ", tr);
-    if (ret == TY_POLY) emit_boxed_text(c, sp_streq(name, "to_i") ? TY_INT : TY_FLOAT, cv, b);
+    /* a boxed slot takes the boxed form, whose Bignum receiver (or Float
+       too wide for sp_int) is its own answer: the sp_int one raised
+       RangeError for it */
+    if (ret == TY_POLY && sp_streq(name, "to_i")) buf_printf(b, "sp_poly_to_i_meth_v(_t%d)", tv);
+    else if (ret == TY_POLY) emit_boxed_text(c, TY_FLOAT, cv, b);
     else plan_put_plain(plan_slot_oint(c, id, ret), ret, cv, b);
     buf_puts(b, "; break;");
     obj_default_done = 1;
