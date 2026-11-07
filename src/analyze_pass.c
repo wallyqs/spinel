@@ -3117,8 +3117,7 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
       }
     }
     else if (sp_streq(lty_ms, "ConstantTargetNode") || sp_streq(lty_ms, "ConstantPathTargetNode")) {
-      const char *cnm_ms = nt_str(nt, tgts[i], "name");
-      LocalVar *cv_ms = cnm_ms ? comp_const(c, cnm_ms) : NULL;
+      LocalVar *cv_ms = comp_const_at(c, tgts[i]);
       if (!cv_ms) continue;
       if (lv_widen(cv_ms, elem)) changed = 1;
     }
@@ -4680,8 +4679,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
           const char *lty_io = nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "";
           if (sp_streq(lty_io, "ConstantTargetNode") || sp_streq(lty_io, "ConstantPathTargetNode")) {
             /* `R, W = IO.pipe`: an untyped constant gets no slot to assign */
-            const char *cnm_io = nt_str(nt, lefts[i], "name");
-            LocalVar *cv_io = cnm_io ? comp_const(c, cnm_io) : NULL;
+            LocalVar *cv_io = comp_const_at(c, lefts[i]);
             if (cv_io && cv_io->type != TY_IO) {
               lv_set_type(cv_io, ty_unify(cv_io->type, TY_IO));
               changed = 1;
@@ -4734,8 +4732,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
           else if (sp_streq(lty_mr, "GlobalVariableTargetNode") || sp_streq(lty_mr, "ClassVariableTargetNode"))
             changed |= masgn_unify_elem(c, ms_mr, &lefts[i], 1, elems[i]);
           else if (sp_streq(lty_mr, "ConstantTargetNode") || sp_streq(lty_mr, "ConstantPathTargetNode")) {
-            const char *cnm = nt_str(nt, lefts[i], "name");
-            LocalVar *cv = cnm ? comp_const(c, cnm) : NULL;
+            LocalVar *cv = comp_const_at(c, lefts[i]);
             if (!cv) continue;
             /* SET, not unify: an early fixpoint round can guess a nested
                element as poly-array before the block body settles; a later
@@ -4893,8 +4890,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         changed |= masgn_local_take(c, lv, et, els[i]);
       }
       else if (lk == NK_ConstantTargetNode || lk == NK_ConstantPathTargetNode) {
-        const char *cnm = nt_str(nt, lefts[i], "name");
-        LocalVar *cv = cnm ? comp_const(c, cnm) : NULL;
+        LocalVar *cv = comp_const_at(c, lefts[i]);
         if (!cv) continue;
         TyKind et = infer_type(c, els[i]);
         if (et == TY_NIL || nt_kind(nt, els[i]) == NK_SplatNode) et = TY_POLY;
@@ -4978,8 +4974,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         changed |= masgn_local_take(c, lv, et, ridx < en ? els[ridx] : value);
       }
       else if (rty3_k == NK_ConstantTargetNode || rty3_k == NK_ConstantPathTargetNode) {
-        const char *cnm2 = nt_str(nt, rights[j], "name");
-        LocalVar *cv2 = cnm2 ? comp_const(c, cnm2) : NULL;
+        LocalVar *cv2 = comp_const_at(c, rights[j]);
         if (!cv2) continue;
         if (lv_widen(cv2, et)) changed = 1;
       }
