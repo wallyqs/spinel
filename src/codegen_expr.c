@@ -1091,11 +1091,16 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
   if (res_o && oint_kind(res)) { emit_oint_expr(c, nd, res, b); return; }
   if (res == TY_POLY && repr_of(c, nd).kind != RK_BOXED) { emit_boxed(c, nd, b); return; }
   /* A String result beside an arm that picks up a handle (`v.is_a?(String)
-     ? v.dup : String.new`, whose narrowed dup is a String): the handle's
-     bytes. Put in as it stands, an sp_String * shared one C conditional
-     with a const char *, and the slot read the handle as bytes. */
-  if (res == TY_STRING && repr_of(c, nd).as_ty == TY_STRBUF && nt_kind(nt, nt_paren_single(c->nt, nd)) == NK_CallNode &&
-      strbuf_call_picks_up(c, nt_paren_single(c->nt, nd))) {
+     ? v.dup : String.new`, whose narrowed dup is a String), or an `||` /
+     `&&` arm whose String is handed on as a handle (`c ? (ARGV[1] or
+     abort) : nil`, logic_value_handle): the handle's bytes. Put in as it
+     stands, an sp_String * shared one C conditional with a const char *,
+     and the slot read the handle as bytes: an alias of the handle struct
+     the collector does not see as the String, so the String was freed. */
+  if (res == TY_STRING &&
+      ((repr_of(c, nd).as_ty == TY_STRBUF && nt_kind(nt, nt_paren_single(c->nt, nd)) == NK_CallNode &&
+        strbuf_call_picks_up(c, nt_paren_single(c->nt, nd))) ||
+       logic_value_handle(c, nd))) {
     str_read_handle_open(b, 0);
     emit_expr(c, nd, b);
     str_read_handle_close(b);
