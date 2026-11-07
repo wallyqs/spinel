@@ -172,6 +172,12 @@ module FFI
       else raise ::TypeError, "no implicit conversion of #{v.class} into Integer"
       end
     end
+    # The C glue carries every integer as a signed 64-bit sp_int. An unsigned
+    # 64-bit value at or past 2**63 crosses as the signed value with the same
+    # bits, and comes back mapped onto the unsigned range again, as the gem's
+    # ULL2NUM gives it. A value past 2**64 - 1 still raises RangeError.
+    def self.word_in(v) = v >= 0x8000000000000000 && v <= 0xffffffffffffffff ? v - 0x10000000000000000 : v
+    def self.u64_out(v) = v < 0 ? v + 0x10000000000000000 : v
     def self.float_arg(v)
       raise ::TypeError, "no implicit conversion to float from nil" if v.nil?
       v.to_f
@@ -182,11 +188,11 @@ module FFI
     # store into memory passes nil, and a String there is refused.
     def write_native(addr, v, keep)
       if integer?
-        Native.put_int(addr, @kind, Type.int_arg(v))
+        Native.put_int(addr, @kind, Type.word_in(Type.int_arg(v)))
       elsif float?
         Native.put_float(addr, @kind, Type.float_arg(v))
       elsif pointer?
-        Native.put_int(addr, K_PTR, FFI.pointer_address(v, keep))
+        Native.put_int(addr, K_PTR, Type.word_in(FFI.pointer_address(v, keep)))
       end
       nil
     end
@@ -194,6 +200,7 @@ module FFI
     # The Ruby value of the native representation at `addr`.
     def read_native(addr)
       if @kind == K_BOOL then Native.get_int(addr, K_U8) != 0
+      elsif @kind == K_U64 then Type.u64_out(Native.get_int(addr, K_U64))
       elsif integer? then Native.get_int(addr, @kind)
       elsif float? then Native.get_float(addr, @kind)
       elsif pointer? then Pointer.new(Native.get_int(addr, K_PTR))
@@ -204,6 +211,7 @@ module FFI
     # A return value: small integers come back register-widened.
     def read_return(addr)
       if @kind == K_BOOL then Native.ret_int(addr, K_BOOL) != 0
+      elsif @kind == K_U64 then Type.u64_out(Native.ret_int(addr, K_U64))
       elsif integer? then Native.ret_int(addr, @kind)
       else read_native(addr)
       end
@@ -212,7 +220,7 @@ module FFI
     def write_return(addr, v, keep)
       # The gem zeroes a nil callback result after any mapped conversion.
       if v.nil? then Native.memset(addr, 0, integer? ? slot_size : @size)
-      elsif integer? then Native.put_ret_int(addr, @kind, Type.int_arg(v))
+      elsif integer? then Native.put_ret_int(addr, @kind, Type.word_in(Type.int_arg(v)))
       else write_native(addr, v, keep)
       end
       nil
