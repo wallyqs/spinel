@@ -1725,7 +1725,7 @@ module FFI
       # the C global now points into it: held for as long as it does
       @ffi_variable_refs ||= {}
       if v.is_a?(AbstractMemory) || v.is_a?(Struct)
-        @ffi_variable_refs[name] = v
+        @ffi_variable_refs.store(name, v)
       else
         @ffi_variable_refs.delete(name)
       end
